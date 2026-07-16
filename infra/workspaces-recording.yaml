@@ -1,0 +1,253 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  远程员工屏幕录制 - 端到端基础设施（WorkSpaces Applications / 原 AppStream 2.0）。
+  创建：录像 S3 桶(SSE-KMS + 版本控制 + 可选 Object Lock + Lifecycle) + KMS CMK +
+  fleet IAM 角色(appstream_machine_role，供会话内 Agent 上传录像) + AppStream Fleet + Stack + 关联。
+  镜像需先用 Image Builder 烤入 ffmpeg + AWS CLI + agent 文件（见 agent/image-setup.ps1），再用其名字填 ImageName。
+
+Parameters:
+  RecordingsBucketName:
+    Type: String
+    Description: 录像 S3 桶名（全局唯一，需与本栈同区域，如 ap-northeast-2）
+  ImageName:
+    Type: String
+    Default: ''
+    Description: 已烤好 Agent 的 WorkSpaces Applications 镜像名（DeployStreaming=true 时必填）
+  DeployStreaming:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 是否部署 AppStream Fleet/Stack（需先有镜像 + 子网/安全组）。地基层(S3/KMS/IAM)先用 false。
+  InstanceType:
+    Type: String
+    Default: stream.standard.medium
+    Description: 流化实例类型
+  FleetType:
+    Type: String
+    Default: ON_DEMAND
+    AllowedValues: [ON_DEMAND, ALWAYS_ON]
+  DesiredInstances:
+    Type: Number
+    Default: 1
+    Description: 期望实例数（单会话）。多会话请改用 DesiredSessions 并调大 MaxSessionsPerInstance。
+  MaxSessionsPerInstance:
+    Type: Number
+    Default: 1
+    Description: 每实例最大会话数。=1 为单会话 fleet（不下发该属性，容量用 DesiredInstances）；2-50 为多会话共享实例（容量用 DesiredSessions）。
+  DesiredSessions:
+    Type: Number
+    Default: 2
+    Description: 多会话模式（MaxSessionsPerInstance>=2）下的期望并发会话总数；单会话模式忽略。
+  SubnetIds:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: fleet 所在子网（DeployStreaming=true 时必填，逗号分隔；建议私有子网 + S3 网关端点）
+  SecurityGroupIds:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: fleet 安全组（DeployStreaming=true 时必填，逗号分隔）
+  EnableDefaultInternetAccess:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 是否开默认公网出网（false 时请为 S3 配 VPC 网关端点以保证上传可达）
+  EnableObjectLock:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 是否启用 Object Lock（WORM）。生产合规建议 true；注意 COMPLIANCE 模式不可提前删除。
+  ObjectLockMode:
+    Type: String
+    Default: GOVERNANCE
+    AllowedValues: [GOVERNANCE, COMPLIANCE]
+  ObjectLockRetentionDays:
+    Type: Number
+    Default: 30
+  TransitionToDeepArchiveDays:
+    Type: Number
+    Default: 30
+    Description: 多少天后把录像转入 Glacier Deep Archive
+
+Conditions:
+  UseObjectLock: !Equals [!Ref EnableObjectLock, 'true']
+  DeployStreamingCond: !Equals [!Ref DeployStreaming, 'true']
+  # MaxSessionsPerInstance=1 视为单会话；>=2 视为多会话共享实例
+  MultiSession: !Not [!Equals [!Ref MaxSessionsPerInstance, '1']]
+
+Resources:
+
+  RecordingsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub 'KMS CMK for ${RecordingsBucketName} screen recordings'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableRootAdmin
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+
+  RecordingsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${RecordingsBucketName}'
+      TargetKeyId: !Ref RecordingsKey
+
+  RecordingsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref RecordingsBucketName
+      ObjectLockEnabled: !If [UseObjectLock, true, !Ref 'AWS::NoValue']
+      ObjectLockConfiguration: !If
+        - UseObjectLock
+        - ObjectLockEnabled: Enabled
+          Rule:
+            DefaultRetention:
+              Mode: !Ref ObjectLockMode
+              Days: !Ref ObjectLockRetentionDays
+        - !Ref 'AWS::NoValue'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref RecordingsKey
+      VersioningConfiguration:
+        Status: Enabled
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ArchiveRecordings
+            Status: Enabled
+            Transitions:
+              - StorageClass: DEEP_ARCHIVE
+                TransitionInDays: !Ref TransitionToDeepArchiveDays
+            NoncurrentVersionTransitions:
+              - StorageClass: DEEP_ARCHIVE
+                TransitionInDays: !Ref TransitionToDeepArchiveDays
+
+  RecordingsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RecordingsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt RecordingsBucket.Arn
+              - !Sub '${RecordingsBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+
+  FleetRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${RecordingsBucketName}-appstream-fleet-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: appstream.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: WriteRecordingsToS3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PutRecordings
+                Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                Resource: !Sub '${RecordingsBucket.Arn}/*'
+              - Sid: GetAgentScripts
+                Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                Resource: !Sub '${RecordingsBucket.Arn}/agent-scripts/*'
+              - Sid: UseKmsForS3
+                Effect: Allow
+                Action:
+                  - 'kms:GenerateDataKey'
+                  - 'kms:Encrypt'
+                  - 'kms:Decrypt'
+                  - 'kms:DescribeKey'
+                Resource: !GetAtt RecordingsKey.Arn
+
+  RecordingFleet:
+    Type: AWS::AppStream::Fleet
+    Condition: DeployStreamingCond
+    Properties:
+      Name: !Sub '${RecordingsBucketName}-fleet'
+      FleetType: !Ref FleetType
+      InstanceType: !Ref InstanceType
+      ImageName: !Ref ImageName
+      IamRoleArn: !GetAtt FleetRole.Arn
+      # 单会话 fleet 不下发 MaxSessionsPerInstance（AppStream 要求该值 2-50，=1 非法）；
+      # 仅多会话（>=2）时才设置，且容量改用 DesiredSessions。
+      MaxSessionsPerInstance: !If [MultiSession, !Ref MaxSessionsPerInstance, !Ref 'AWS::NoValue']
+      ComputeCapacity:
+        DesiredInstances: !If [MultiSession, !Ref 'AWS::NoValue', !Ref DesiredInstances]
+        DesiredSessions: !If [MultiSession, !Ref DesiredSessions, !Ref 'AWS::NoValue']
+      StreamView: DESKTOP
+      DisconnectTimeoutInSeconds: 300
+      IdleDisconnectTimeoutInSeconds: 900
+      MaxUserDurationInSeconds: 57600
+      EnableDefaultInternetAccess: !Ref EnableDefaultInternetAccess
+      VpcConfig:
+        SubnetIds: !Ref SubnetIds
+        SecurityGroupIds: !Ref SecurityGroupIds
+
+  RecordingStack:
+    Type: AWS::AppStream::Stack
+    Condition: DeployStreamingCond
+    Properties:
+      Name: !Sub '${RecordingsBucketName}-stack'
+      ApplicationSettings:
+        Enabled: false
+      StreamingExperienceSettings:
+        PreferredProtocol: TCP
+
+  StackFleetAssociation:
+    Type: AWS::AppStream::StackFleetAssociation
+    Condition: DeployStreamingCond
+    Properties:
+      FleetName: !Ref RecordingFleet
+      StackName: !Ref RecordingStack
+
+Outputs:
+  RecordingsBucket:
+    Description: 录像 S3 桶
+    Value: !Ref RecordingsBucket
+  RecordingsKeyArn:
+    Description: 录像加密 CMK
+    Value: !GetAtt RecordingsKey.Arn
+  FleetRoleArn:
+    Description: fleet IAM 角色（会话内 Agent 用它上传）
+    Value: !GetAtt FleetRole.Arn
+  FleetName:
+    Condition: DeployStreamingCond
+    Value: !Ref RecordingFleet
+  StackName:
+    Condition: DeployStreamingCond
+    Value: !Ref RecordingStack

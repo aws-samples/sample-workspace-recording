@@ -1,0 +1,24 @@
+{
+  "SessionStart": {
+    "executables": [
+      {
+        "context": "system",
+        "filename": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "arguments": "-NoProfile -ExecutionPolicy Bypass -File C:\\wsrec\\session-start.ps1",
+        "s3LogEnabled": true
+      }
+    ],
+    "waitingTime": 60
+  },
+  "SessionTermination": {
+    "executables": [
+      {
+        "context": "system",
+        "filename": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "arguments": "-NoProfile -ExecutionPolicy Bypass -File C:\\wsrec\\session-stop.ps1",
+        "s3LogEnabled": true
+      }
+    ],
+    "waitingTime": 50
+  }
+}

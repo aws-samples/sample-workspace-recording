@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="UTF-8">
+<title>WorkSpaces 合规录制方案 — 架构图 v3（落地形态）</title>
+<style>
+:root {
+  --color-bg: #faf9fc;
+  --color-text: #131920;
+  --color-text-secondary: #44546f;
+  --color-text-muted: #8993a4;
+  --color-bg-secondary: #ffffff;
+  --color-border: rgba(0,0,0,.12);
+  --color-border-light: rgba(0,0,0,.06);
+  --font-sans: "Amazon Ember","Helvetica Neue","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+* { box-sizing: border-box; }
+body { background: var(--color-bg); font-family: var(--font-sans); color: var(--color-text); margin: 0; padding: 24px; }
+h2 { font-size: 19px; font-weight: 600; margin: 0 0 6px 0; }
+.subtitle { font-size: 12px; color: var(--color-text-muted); margin: 0 0 14px 0; }
+.arch-container { display: flex; flex-direction: column; gap: 14px; max-width: 960px; margin: 0 auto; }
+
+.pill-note {
+  max-width: 960px; margin: 0 auto 18px; padding: 9px 14px;
+  background: #fef7e6; border: 1px solid #f9dfa3; border-radius: 8px;
+  font-size: 11.5px; color: #573a00; line-height: 1.6;
+}
+.pill-note b { color: #b35c00; }
+
+.layer { border: 1.5px solid var(--color-border); border-radius: 12px; padding: 18px 20px 16px; position: relative; background: #fff; }
+.layer-label { position: absolute; top: -10px; left: 16px; background: var(--color-bg); padding: 0 8px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--color-text-muted); }
+.layer-note { font-size: 11px; color: var(--color-text-muted); margin: 10px 0 0; }
+.layer-note b { color: #de350b; }
+
+.layer-mgmt    { border-color: #de350b40; } .layer-mgmt .layer-label    { color: #de350b; }
+.layer-capture { border-color: #0052cc40; } .layer-capture .layer-label { color: #0052cc; }
+.layer-auth    { border-color: #b3008f40; } .layer-auth .layer-label    { color: #b3008f; }
+.layer-storage { border-color: #ff991f40; } .layer-storage .layer-label { color: #ff991f; }
+.layer-index   { border-color: #6554c040; } .layer-index .layer-label   { color: #6554c0; }
+.layer-gov     { border-color: #00875a40; } .layer-gov .layer-label     { color: #00875a; }
+.layer-consent { border-color: #5243aa40; background: #f7f6fd; } .layer-consent .layer-label { color: #5243aa; }
+
+.components { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; }
+.component { display: flex; align-items: center; gap: 9px; background: var(--color-bg-secondary); border: 1px solid var(--color-border-light); border-radius: 8px; padding: 9px 13px; font-size: 12.5px; font-weight: 500; min-width: 150px; flex: 1 1 auto; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.component .sub { font-size: 10.5px; color: var(--color-text-muted); font-weight: 400; }
+.component-icon { width: 30px; height: 30px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; color: #fff; }
+.i-ws { background:#0052CC; } .i-agent { background:#00875A; } .i-trigger { background:#DE350B; }
+.i-ffmpeg { background:#4CAF50; } .i-script { background:#2196F3; }
+.i-iam { background:#C925D1; } .i-net { background:#5B6ABF; }
+.i-s3 { background:#569A31; } .i-kms { background:#DD344C; } .i-lock { background:#232F3E; } .i-lc { background:#8C4FFF; }
+.i-lambda { background:#FF9900; } .i-db { background:#2E27AD; }
+.i-ct { background:#A166FF; } .i-cw { background:#FF4F8B; } .i-break { background:#D13212; } .i-sep { background:#00875A; }
+.i-mgmt { background:#E7157B; } .i-img { background:#3F51B5; }
+.i-consent { background:#5243AA; } .i-min { background:#0097A7; } .i-ret { background:#00875A; } .i-law { background:#5243AA; }
+
+.arrow-row { display: flex; justify-content: center; align-items: center; padding: 2px 0; gap: 8px; }
+.arrow { font-size: 18px; color: var(--color-text-muted); }
+.flow-label { font-size: 11px; color: var(--color-text-secondary); }
+
+.legend { margin: 22px auto 0; max-width: 960px; padding: 14px 18px; background: #fff; border: 1px solid var(--color-border-light); border-radius: 10px; font-size: 12px; color: var(--color-text-secondary); line-height: 1.9; }
+.legend-title { font-weight: 700; margin-bottom: 4px; color: var(--color-text); }
+.tag { display:inline-block; font-size:10.5px; font-weight:700; padding:1px 7px; border-radius:6px; margin-left:8px; }
+.tag-key { background:#fce8fb; color:#b3008f; }
+.tag-must { background:#ffe0e0; color:#b30000; }
+.tag-defer { background:#eceff1; color:#546e7a; }
+</style>
+</head>
+<body>
+<h2>WorkSpaces 合规录制方案 — 架构图 v3（落地形态）</h2>
+<p class="subtitle">Amazon WorkSpaces Applications（原 AppStream 2.0）· 首尔 ap-northeast-2 · 有输入即录/空闲即停 · fleet IAM 角色（零静态密钥）· 合规存储</p>
+
+<div class="pill-note">
+  <b>平台变更说明：</b> WorkSpaces Pools 已宣布停止服务（2026-07-31 起不收新客户，2027-12-31 EOL），且香港 ap-east-1 不支持 WorkSpaces 系列。
+  按官方指引改用其接班人 <b>WorkSpaces Applications</b>（非持久 · 多会话 · Windows）；区域取「支持该服务且离长沙最近」的 <b>首尔 ap-northeast-2</b>（正式定区域前需实测延时）。
+</div>
+
+<div class="arch-container">
+
+  <!-- Management -->
+  <div class="layer layer-mgmt">
+    <div class="layer-label">交付与镜像治理层</div>
+    <div class="components">
+      <div class="component"><div class="component-icon i-mgmt">🏭</div><div>Image Builder 黄金镜像<br><span class="sub">烤入 ffmpeg + AWS CLI + Agent</span></div></div>
+      <div class="component"><div class="component-icon i-img">📜</div><div>会话脚本配置<br><span class="sub">SessionStart / SessionStop</span></div></div>
+      <div class="component"><div class="component-icon i-cw">📊</div><div>CloudWatch<br><span class="sub">指标 / 告警</span></div></div>
+    </div>
+  </div>
+
+  <div class="arrow-row"><span class="arrow">⬇</span><span class="flow-label">镜像下发 · fleet/stack 启动</span></div>
+
+  <!-- Capture -->
+  <div class="layer layer-capture">
+    <div class="layer-label">采集层 — WorkSpaces Applications 会话（非持久·多会话·Windows·首尔）</div>
+    <div class="components">
+      <div class="component"><div class="component-icon i-ws">🖥</div><div>流化会话<br><span class="sub">用户会话上下文</span></div></div>
+      <div class="component"><div class="component-icon i-agent">🛡</div><div>record-agent.ps1<br><span class="sub">用户会话内运行</span></div></div>
+      <div class="component"><div class="component-icon i-trigger">🎯</div><div>空闲检测<br><span class="sub">GetLastInputInfo·有输入即录</span></div></div>
+      <div class="component"><div class="component-icon i-ffmpeg">▶</div><div>ffmpeg 分段录制<br><span class="sub">空闲即停·恢复自动续录</span></div></div>
+      <div class="component"><div class="component-icon i-script">⚙</div><div>会话脚本<br><span class="sub">start 拉起 · stop 冲刷</span></div></div>
+    </div>
+    <p class="layer-note">触发口径：本阶段为「任何键鼠输入即录」，暂不做敏感动作规则目录。<b>Session 0 隔离 → Agent 必须在用户会话内，处于用户上下文，防篡改有限。</b></p>
+  </div>
+
+  <div class="arrow-row"><span class="arrow">⬇</span><span class="flow-label">分段写完（静默 quietSeconds）+ 元数据（用户/会话/时间戳）</span></div>
+
+  <!-- Auth -->
+  <div class="layer layer-auth">
+    <div class="layer-label">身份与凭证层 <span class="tag tag-must">零静态密钥</span> <span class="tag tag-defer">最小权限/令牌下发：本阶段未做</span></div>
+    <div class="components">
+      <div class="component"><div class="component-icon i-iam">🔑</div><div>fleet IAM 角色<br><span class="sub">AWS CLI 默认凭证链自动获取</span></div></div>
+      <div class="component"><div class="component-icon i-net">🔒</div><div>TLS 传输<br><span class="sub">aws s3 cp · 分段上传</span></div></div>
+    </div>
+    <p class="layer-note">桌面上不存放任何长期 AK/SK；凭证来自 fleet 关联的 IAM 角色。</p>
+  </div>
+
+  <div class="arrow-row"><span class="arrow">⬇</span><span class="flow-label">加密上传到会话专属 S3 prefix：recordings/&lt;用户&gt;/&lt;日期&gt;/&lt;主机_会话&gt;/</span></div>
+
+  <!-- Storage -->
+  <div class="layer layer-storage">
+    <div class="layer-label">合规存储层（WORM，首尔同区）</div>
+    <div class="components">
+      <div class="component"><div class="component-icon i-s3">S3</div><div>Amazon S3<br><span class="sub">会话前缀隔离</span></div></div>
+      <div class="component"><div class="component-icon i-kms">🔑</div><div>SSE-KMS<br><span class="sub">专用 CMK·限定解密</span></div></div>
+      <div class="component"><div class="component-icon i-lock">🔒</div><div>Object Lock<br><span class="sub">Compliance + 保留期</span></div></div>
+      <div class="component"><div class="component-icon i-lc">📦</div><div>Lifecycle<br><span class="sub">→ Glacier Deep Archive</span></div></div>
+      <div class="component"><div class="component-icon i-lock">#</div><div>内容哈希<br><span class="sub">完整性 / 保管链</span></div></div>
+    </div>
+  </div>
+
+  <div class="arrow-row"><span class="arrow">⬇</span><span class="flow-label">S3 Event 触发</span></div>
+
+  <!-- Index -->
+  <div class="layer layer-index">
+    <div class="layer-label">索引与检索层（可选）</div>
+    <div class="components">
+      <div class="component"><div class="component-icon i-lambda">λ</div><div>Lambda 建索引<br><span class="sub">解析元数据</span></div></div>
+      <div class="component"><div class="component-icon i-db">🔎</div><div>DynamoDB / OpenSearch<br><span class="sub">按 谁/何时/哪台 检索</span></div></div>
+    </div>
+    <p class="layer-note">不做转码（ffmpeg 已出压缩 H.264），仅在需统一格式/缩略图时再加。</p>
+  </div>
+
+  <!-- Governance -->
+  <div class="layer layer-gov">
+    <div class="layer-label">治理与审计层 <span class="tag tag-key">合规命门</span></div>
+    <div class="components">
+      <div class="component"><div class="component-icon i-sep">🧩</div><div>职责分离<br><span class="sub">KMS + IAM 双重限制</span></div></div>
+      <div class="component"><div class="component-icon i-break">🚨</div><div>破玻璃调阅<br><span class="sub">审批工单·留痕</span></div></div>
+      <div class="component"><div class="component-icon i-ct">📝</div><div>CloudTrail<br><span class="sub">开 S3 数据事件</span></div></div>
+      <div class="component"><div class="component-icon i-cw">📡</div><div>覆盖率巡检<br><span class="sub">Agent 心跳·断档告警</span></div></div>
+    </div>
+  </div>
+
+  <!-- Consent -->
+  <div class="layer layer-consent">
+    <div class="layer-label">告知与合规层（必做）</div>
+    <div class="components">
+      <div class="component"><div class="component-icon i-consent">📢</div><div>登录告知横幅<br><span class="sub">明确告知与同意</span></div></div>
+      <div class="component"><div class="component-icon i-min">🎚</div><div>数据最小化<br><span class="sub">仅活动时录</span></div></div>
+      <div class="component"><div class="component-icon i-ret">⏳</div><div>留存期上限<br><span class="sub">到期依 Lifecycle 处置</span></div></div>
+      <div class="component"><div class="component-icon i-law">⚖</div><div>法域合规<br><span class="sub">跨境·劳动法·隐私法</span></div></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <div class="legend-title">数据流说明</div>
+  ① session-start 在用户会话内拉起 record-agent.ps1<br>
+  ② Agent 按键鼠活动起停 ffmpeg：有输入即录、空闲超阈值停、恢复输入自动续录，分段落到本地缓冲<br>
+  ③ 分段写完（静默 quietSeconds）→ 用 fleet IAM 角色凭证加密上传到会话专属 S3 prefix，成功即删本地（零静态密钥）<br>
+  ④ 登出 / 实例回收前，session-stop 置停止标志，Agent 冲刷剩余分段并退出<br>
+  ⑤ S3 Event 触发 Lambda 建索引（可选），供审计检索<br>
+  ⑥ Object Lock + KMS + CloudTrail(S3 数据事件) 提供防篡改与调阅审计<br>
+  ⑦ 中心侧按 Agent 心跳做覆盖率巡检与断档告警
+</div>
+
+</body></html>

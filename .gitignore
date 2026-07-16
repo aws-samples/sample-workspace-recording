@@ -1,0 +1,55 @@
+# OS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+
+# Editors and local IDE state
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local Kiro and AI-DLC workflow artifacts
+.kiro/
+aidlc-docs/
+
+# Local environment, credentials, and machine-specific configuration
+.env
+.env.*
+!.env.example
+.aws/
+*.pem
+*.key
+*.p12
+*.pfx
+config.local.json
+config.runtime.json
+
+# Runtime state and logs
+*.log
+*.pid
+.stop
+
+# Screen recordings and derived visual output
+recordings/
+captures/
+screenshots/
+frames/
+output/
+outputs/
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+
+# Image Builder downloads and temporary packaging artifacts
+ffmpeg.zip
+ffmpeg_extract/
+PSTools.zip
+PSTools/
+AWSCLIV2.msi
+agent.zip
