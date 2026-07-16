@@ -8,7 +8,13 @@
 #>
 $ErrorActionPreference = 'SilentlyContinue'
 
-$WorkDir = 'C:\wsrec\buffer'
+$Base       = 'C:\wsrec'
+$SeedConfig = Join-Path $Base 'config.json'
+$RuntimeConfig = Join-Path $Base 'config.runtime.json'
+$ConfigPath = if (Test-Path $RuntimeConfig) { $RuntimeConfig } else { $SeedConfig }
+$cfg = $null
+try { $cfg = Get-Content -Raw -Path $ConfigPath -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch {}
+$WorkDir = if ($cfg -and $cfg.localDir) { [string]$cfg.localDir } else { 'C:\wsrec\buffer' }
 $Stop    = Join-Path $WorkDir '.stop'
 $Log     = Join-Path $WorkDir 'bootstrap.log'
 function Write-BLog([string]$m){ $l = "{0}  {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m; try { Add-Content -Path $Log -Value $l } catch {} }

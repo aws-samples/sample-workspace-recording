@@ -1,0 +1,17 @@
+{
+  "s3Bucket": "${WSREC_S3_BUCKET}",
+  "region": "${WSREC_REGION}",
+  "ffmpegPath": "${WSREC_FFMPEG_PATH}",
+  "awsPath": "${WSREC_AWS_PATH}",
+  "awsProfile": "${WSREC_AWS_PROFILE}",
+  "scriptsPrefix": "${WSREC_SCRIPTS_PREFIX}",
+  "localDir": "${WSREC_LOCAL_DIR}",
+  "psexecPath": "${WSREC_PSEXEC_PATH}",
+  "frameRate": "${WSREC_FRAME_RATE}",
+  "segmentSeconds": "${WSREC_SEGMENT_SECONDS}",
+  "idleThresholdSeconds": "${WSREC_IDLE_THRESHOLD_SECONDS}",
+  "pollSeconds": "${WSREC_POLL_SECONDS}",
+  "quietSeconds": "${WSREC_QUIET_SECONDS}",
+  "sseKms": "${WSREC_SSE_KMS}",
+  "kmsKeyId": "${WSREC_KMS_KEY_ID}"
+}

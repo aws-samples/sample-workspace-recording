@@ -10,7 +10,7 @@ Description: >
 Parameters:
   RecordingsBucketName:
     Type: String
-    Description: 录像 S3 桶名（全局唯一，需与本栈同区域，如 ap-northeast-2）
+    Description: 录像 S3 桶名（全局唯一，需与本栈同区域，如 us-east-1）
   ImageName:
     Type: String
     Default: ''

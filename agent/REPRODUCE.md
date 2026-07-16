@@ -1,9 +1,8 @@
-本指南让你在**自己的 AWS 账号**里从零搭起同一套会话录屏方案。
-**唯一不能直接复用的是镜像**（镜像属账号私有，且你要自己烤 `ffmpeg + PsExec + AWS CLI`）——
-其余全部可复用：CloudFormation 模板 `infra/workspaces-recording.yaml`、`agent/` 目录下所有脚本、`config.json`。
+本指南帮助你在**自己的 AWS 账号**中从零部署同一套会话录屏方案。
+镜像属于账号私有，需要自行烤入 `ffmpeg + PsExec + AWS CLI`；CloudFormation 模板、脚本、配置模板和部署流程均可复用。
 
 > 已验证结论：本方案端到端跑通，录到真实桌面（h264 / 1280x720），gdigrab 黑屏风险已排除。
-> 架构与踩坑速览见 [`README.md`](./README.md)；本文件给**每一步的具体命令**。
+> 架构与配置速览见 [`../README.md`](../README.md)；本文件给**每一步的具体命令**。
 
 ---
 
@@ -12,7 +11,7 @@
 ```
 用户登录会话
   -> AppStream 以 SYSTEM 跑 session-start.ps1 (launcher, 烤在镜像里)
-     -> 从 S3 agent-scripts/ 拉最新 record-agent.ps1 + config.json (带 --profile appstream_machine_role)
+     -> 从 S3 agent-scripts/ 拉最新 record-agent.ps1 + 已渲染的运行时 config.json (带 --profile appstream_machine_role)
      -> 等会话 Active 拿 SessionId -> PsExec -d -i <SessionId> -s 把 record-agent 以 SYSTEM 送进会话桌面
         -> ffmpeg gdigrab 连续分段录桌面 -> 分段上传 S3 recordings/...
 用户登出 -> session-stop.ps1 落 .stop -> record-agent 停录 + 冲刷上传
@@ -20,16 +19,17 @@
 
 **为什么这个顺序**：镜像里的 fleet 要填镜像名，镜像里的脚本要往你的桶传录像。存在先有鸡还是先有蛋。推荐分两段部署：
 
-1. 先建**地基层**（S3 / KMS / fleet IAM 角色），`DeployStreaming=false` —— 这样桶先存在。
-2. 改 `config.json`（填你的桶）→ 传脚本到 S3 → 在 Image Builder 烤镜像。
-3. 再用镜像名**重新部署**，`DeployStreaming=true` → 建出 Fleet / Stack / 关联。
-4. 启动 fleet → 连会话测试 → 验证 S3。
+1. 先建**地基层**（S3 / KMS / fleet IAM 角色），`DeployStreaming=false`，让桶和 KMS Key 先存在。
+2. 复制 `.env.example` 为本地 `.env`，填入 CloudFormation 输出；脚本生成 `config.runtime.json` 并上传运行时文件。
+3. 把不含 `.env` 的 Agent 包复制到 Image Builder，烤入稳定壳和生成的 seed 配置。
+4. 用镜像名**重新部署**，`DeployStreaming=true`，创建 Fleet / Stack / 关联。
+5. 启动 fleet，连接会话测试并验证 S3。
 
 ---
 
 ## 前置条件
 
-- 一个 AWS 账号，目标区域支持 WorkSpaces Applications / AppStream 2.0（本文用 `ap-northeast-2` 首尔）。
+- 一个 AWS 账号，目标区域支持 WorkSpaces Applications / AppStream 2.0（示例使用 `us-east-1`，请按需替换）。
 - 本机装好 **AWS CLI v2**，且凭证有足够权限（CloudFormation / S3 / KMS / IAM / AppStream）。
 - 目标区域里有一个 **VPC**，至少一个**子网**和一个**安全组**（能出网到 S3：公网出网，或配 S3 网关端点）。
 - 拿到本仓库的 `infra/workspaces-recording.yaml` 和整个 `agent/` 目录。
@@ -38,10 +38,10 @@
 ### 设置环境变量（后续命令都用它们）
 
 ```bash
-export AWS_REGION=ap-northeast-2
+export AWS_REGION=us-east-1
 export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-# S3 桶名必须全局唯一；这里用账号号拼一个
-export BUCKET=wsrec-${ACCOUNT_ID}-apne2
+# S3 桶名必须全局唯一
+export BUCKET=wsrec-${ACCOUNT_ID}-${AWS_REGION}
 export STACK=wsrec-foundation
 # 你的网络（换成你自己的）
 export SUBNETS=subnet-aaaaaaaa,subnet-bbbbbbbb
@@ -75,51 +75,65 @@ aws cloudformation describe-stacks --stack-name "$STACK" --region "$AWS_REGION" 
   --query "Stacks[0].Outputs" --output table
 ```
 
-记下 `RecordingsBucket` 和 `RecordingsKeyArn`。KMS 别名固定是 `alias/$BUCKET`，可直接用它当 `kmsKeyId`。
+记下 `RecordingsBucket` 和 `RecordingsKeyArn`。KMS 别名固定为 `alias/$BUCKET`，后续可把别名或 Key ID 写入本地 `.env`。
 
-拿 KMS Key Id（后面填进 config.json）：
+取得 KMS Key ID：
 
 ```bash
-aws kms describe-key --key-id "alias/$BUCKET" --region "$AWS_REGION" \
-  --query "KeyMetadata.KeyId" --output text
+export KMS_KEY_ID=$(aws kms describe-key --key-id "alias/$BUCKET" --region "$AWS_REGION" \
+  --query "KeyMetadata.KeyId" --output text)
 ```
 
 ---
 
-## 步骤 2：改 config.json
+## 步骤 2：创建本地环境配置并生成运行时 JSON
 
-编辑 `agent/config.json`，至少改这几项（其余保持默认即可）：
-
-- `s3Bucket`：改成 `$BUCKET` 的实际值
-- `region`：你的区域
-- `kmsKeyId`：上一步拿到的 Key Id（或留空并保持 `sseKms:true`，走桶默认 CMK）
-
-用命令改（把 `<KEY_ID>` 换成实际值）：
+`config.template.json` 只包含 `${WSREC_*}` 占位符，可以安全提交。真实环境值写入 `agent/.env`；该文件和生成的 `agent/config.runtime.json` 均被 `.gitignore` 忽略。
 
 ```bash
 cd agent
+cp .env.example .env
+```
+
+编辑 `.env`，至少替换以下值：
+
+```dotenv
+WSREC_S3_BUCKET=replace-with-your-recordings-bucket
+WSREC_REGION=us-east-1
+WSREC_KMS_KEY_ID=replace-with-your-kms-key-id
+```
+
+也可以由当前 shell 变量生成本地 `.env`，同时保留示例中的其余默认值：
+
+```bash
+cp .env.example .env
 python3 - <<'PY'
-import json
-p="config.json"
-c=json.load(open(p))
 import os
-c["s3Bucket"]=os.environ["BUCKET"]
-c["region"]=os.environ["AWS_REGION"]
-# c["kmsKeyId"]="<KEY_ID>"   # 需要指定 CMK 时打开
-json.dump(c, open(p,"w"), indent=2)
-print(json.dumps(c, indent=2))
+from pathlib import Path
+p = Path('.env')
+text = p.read_text()
+text = text.replace('WSREC_S3_BUCKET=replace-with-your-recordings-bucket', f'WSREC_S3_BUCKET={os.environ["BUCKET"]}')
+text = text.replace('WSREC_REGION=us-east-1', f'WSREC_REGION={os.environ["AWS_REGION"]}')
+text = text.replace('WSREC_KMS_KEY_ID=', f'WSREC_KMS_KEY_ID={os.environ["KMS_KEY_ID"]}')
+p.write_text(text)
 PY
+```
+
+生成并验证强类型运行时配置，但暂不上传：
+
+```bash
+./upload-agent-scripts.sh --render-only
+python3 -m json.tool config.runtime.json >/dev/null
 cd ..
 ```
 
-`config.json` 关键字段说明见 [`README.md`](./README.md#配置项configjson)。**`awsProfile` 保持 `appstream_machine_role` 不要改**——这是 fleet 角色凭证所在的命名 profile。
+`.env` 不会被执行或上传。渲染器只解析键值、替换占位符，并把数字和 Boolean 恢复为 JSON 原生类型。
 
 ---
 
-## 步骤 3：把 agent 脚本传到 S3
+## 步骤 3：把 Agent 脚本和运行时配置传到 S3
 
-`record-agent.ps1` 和运行时 `config.json` 走 S3 分发（不烤进镜像，以后改逻辑免重烤）。
-桶已在步骤 1 建好，fleet 角色已有 `s3:GetObject(agent-scripts/*)` + `kms:Decrypt` 权限。
+`record-agent.ps1` 和生成的 `config.runtime.json` 走 S3 分发。上传时，运行时配置对象仍命名为 `config.json`，以兼容 bootstrap。
 
 ```bash
 cd agent
@@ -179,7 +193,10 @@ Builder 是干净的 Windows，需要把 `agent/` 这几个小文本文件弄进
 
 ```bash
 cd agent
-zip -r /tmp/agent.zip . -x '*.md'
+# Ensure config.runtime.json exists before packaging.
+./upload-agent-scripts.sh --render-only
+# Never include the local .env file in the Image Builder package.
+zip -r /tmp/agent.zip . -x '*.md' '.env' '.env.example'
 aws s3 cp /tmp/agent.zip "s3://$BUCKET/tmp/agent.zip" --region "$AWS_REGION" --sse aws:kms
 # 生成 1 小时有效的预签名下载链接
 aws s3 presign "s3://$BUCKET/tmp/agent.zip" --expires-in 3600 --region "$AWS_REGION"
@@ -387,16 +404,16 @@ aws s3api list-buckets --query "Buckets[?starts_with(Name,'appstream-logs')].Nam
 
 ## 步骤 10：改录制逻辑（免重烤镜像）
 
-`record-agent.ps1` / 运行时 `config.json` 走 S3。改完只需重传，**下个会话自动生效**：
+`record-agent.ps1` 和生成后的运行时 `config.json` 走 S3。修改录制参数时编辑本地 `.env`，然后重新渲染并上传；**下个会话自动生效**：
 
 ```bash
 cd agent
-# 例如把分段改短便于测试：编辑 config.json 的 segmentSeconds
+# 编辑 .env，例如调整 WSREC_SEGMENT_SECONDS
 ./upload-agent-scripts.sh
 cd ..
 ```
 
-只有改**烤进镜像的**部分（`session-start.ps1` / `session-stop.ps1` / 会话脚本配置 / ffmpeg / PsExec / AWS CLI）才需要重烤镜像（回到步骤 4），并把新镜像名走步骤 5 更新 stack。
+`.env` 和 `config.runtime.json` 都不会提交到 Git。只有修改**烤进镜像的**部分（`session-start.ps1` / `session-stop.ps1` / 会话脚本配置 / ffmpeg / PsExec / AWS CLI），或修改 bootstrap 定位 S3 所需的 seed 参数时，才需要重烤镜像并更新 stack。
 
 ---
 
@@ -439,8 +456,8 @@ aws s3api delete-bucket --bucket "$BUCKET" --region "$AWS_REGION"
 
 ## 上线前必须补（合规 / 生产化，Agent 之外）
 
-- **🔴 跨境数据出境**：员工在境内、录像存境外涉数据出境评估，**先问法务/合规**。
-- **告知与同意**：登录横幅 + 员工书面同意（多地强制）。
+- **隐私与数据驻留**：根据部署区域、用户所在地和适用法律完成隐私、劳动与数据传输评估。
+- **告知与同意**：提供清晰的登录提示，并取得适用法律要求的授权或同意。
 - **留存与审计**：`EnableObjectLock=true`（WORM）、CloudTrail S3 数据事件、调阅审计 / 破玻璃流程。
 - **触发机制**：当前会话期间持续录；建议改用 `WTSConnectState`（Active 录、Disconnected 停）。
 - **网络生产化**：私有子网 + S3 网关端点 + KMS 接口端点 + NAT，替换公有子网 + `EnableDefaultInternetAccess=true`。

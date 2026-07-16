@@ -24,16 +24,22 @@ $Src  = $PSScriptRoot
 $FfmpegExe = Join-Path $Base 'ffmpeg\bin\ffmpeg.exe'
 
 Write-Host "== 1) deploy agent files to $Base =="
-# Bootstrap model: bake only the stable shell (bootstrap session-start.ps1, session-stop.ps1
-# and the SEED config.json). record-agent.ps1 is NOT baked - it is pulled from S3 at each
-# session start by the bootstrap, so recording logic can be updated without rebuilding the image.
-# Upload record-agent.ps1 (and optionally config.json) to S3 with upload-agent-scripts.sh.
+# Bootstrap model: bake only the stable shell (session-start.ps1/session-stop.ps1)
+# and a rendered seed config. record-agent.ps1 is pulled from S3 at each session start.
+# Generate config.runtime.json locally from config.template.json + .env before packaging
+# this folder for the Image Builder. The .env file must never be copied or uploaded.
+$RuntimeConfig = Join-Path $Src 'config.runtime.json'
+if (-not (Test-Path $RuntimeConfig)) {
+  throw "config.runtime.json not found. Run ./upload-agent-scripts.sh --render-only locally before packaging agent/."
+}
 New-Item -ItemType Directory -Force -Path $Base | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Base 'ffmpeg\bin') | Out-Null
-foreach ($f in @('session-start.ps1','session-stop.ps1','config.json')) {
+foreach ($f in @('session-start.ps1','session-stop.ps1')) {
   Copy-Item (Join-Path $Src $f) -Destination $Base -Force
   Write-Host "  copied $f"
 }
+Copy-Item $RuntimeConfig -Destination (Join-Path $Base 'config.json') -Force
+Write-Host "  copied rendered config.runtime.json as seed config.json"
 
 Write-Host "== 2) ensure ffmpeg =="
 if (-not (Test-Path $FfmpegExe)) {
@@ -97,12 +103,13 @@ Copy-Item (Join-Path $Src 'appstream-session-scripts-config.json') -Destination 
 Write-Host "  wrote $sess\config.json"
 
 Write-Host ""
-Write-Host "IMPORTANT: record-agent.ps1 is pulled from S3 at runtime, not baked into the image."
-Write-Host "  Before first use, upload it to S3 (from a machine with AWS creds):"
-Write-Host "    ./upload-agent-scripts.sh    (uploads record-agent.ps1 + config.json to s3://<bucket>/agent-scripts/)"
+Write-Host "IMPORTANT: record-agent.ps1 and the rendered runtime config are pulled from S3 at runtime."
+Write-Host "  On the deployment machine, create agent/.env from .env.example and run:"
+Write-Host "    ./upload-agent-scripts.sh    (renders config.runtime.json, then uploads the script + runtime config)"
+Write-Host "  The local .env file is never uploaded."
 Write-Host "  The fleet IAM role needs s3:GetObject on agent-scripts/* and kms:Decrypt (see infra/workspaces-recording.yaml)."
 Write-Host ""
-Write-Host "Done. Verify config.json has the correct s3Bucket/region/scriptsPrefix, then create the image with Image Assistant."
+Write-Host "Done. Verify the rendered seed at C:\wsrec\config.json, then create the image with Image Assistant."
 Write-Host "NOTE: create-image requires at least one application in the catalog, so add a placeholder first:"
 Write-Host '  $ia = "C:\Program Files\Amazon\Photon\ConsoleImageBuilder\image-assistant.exe"'
 Write-Host '  & $ia add-application --name Notepad --display-name Notepad --absolute-app-path "C:\Windows\System32\notepad.exe"'

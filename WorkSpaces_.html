@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="UTF-8">
-<title>WorkSpaces 合规录制方案 — 架构图 v3（落地形态）</title>
+<title>WorkSpaces Applications 会话录制参考架构</title>
 <style>
 :root {
   --color-bg: #faf9fc;
@@ -65,12 +65,12 @@ h2 { font-size: 19px; font-weight: 600; margin: 0 0 6px 0; }
 </style>
 </head>
 <body>
-<h2>WorkSpaces 合规录制方案 — 架构图 v3（落地形态）</h2>
-<p class="subtitle">Amazon WorkSpaces Applications（原 AppStream 2.0）· 首尔 ap-northeast-2 · 有输入即录/空闲即停 · fleet IAM 角色（零静态密钥）· 合规存储</p>
+<h2>WorkSpaces Applications 会话录制参考架构</h2>
+<p class="subtitle">非持久 Windows 会话 · SYSTEM + PsExec · ffmpeg 分段录制 · fleet IAM 角色 · S3/KMS 存储</p>
 
 <div class="pill-note">
-  <b>平台变更说明：</b> WorkSpaces Pools 已宣布停止服务（2026-07-31 起不收新客户，2027-12-31 EOL），且香港 ap-east-1 不支持 WorkSpaces 系列。
-  按官方指引改用其接班人 <b>WorkSpaces Applications</b>（非持久 · 多会话 · Windows）；区域取「支持该服务且离长沙最近」的 <b>首尔 ap-northeast-2</b>（正式定区域前需实测延时）。
+  <b>部署说明：</b> 请根据服务可用性、用户体验、数据驻留、网络和合规要求选择 AWS 区域。
+  本图不绑定任何客户、地理位置、AWS 账号或生产环境。
 </div>
 
 <div class="arch-container">
@@ -89,15 +89,15 @@ h2 { font-size: 19px; font-weight: 600; margin: 0 0 6px 0; }
 
   <!-- Capture -->
   <div class="layer layer-capture">
-    <div class="layer-label">采集层 — WorkSpaces Applications 会话（非持久·多会话·Windows·首尔）</div>
+    <div class="layer-label">采集层 — WorkSpaces Applications 会话（非持久 · Windows）</div>
     <div class="components">
-      <div class="component"><div class="component-icon i-ws">🖥</div><div>流化会话<br><span class="sub">用户会话上下文</span></div></div>
-      <div class="component"><div class="component-icon i-agent">🛡</div><div>record-agent.ps1<br><span class="sub">用户会话内运行</span></div></div>
-      <div class="component"><div class="component-icon i-trigger">🎯</div><div>空闲检测<br><span class="sub">GetLastInputInfo·有输入即录</span></div></div>
-      <div class="component"><div class="component-icon i-ffmpeg">▶</div><div>ffmpeg 分段录制<br><span class="sub">空闲即停·恢复自动续录</span></div></div>
+      <div class="component"><div class="component-icon i-ws">🖥</div><div>流化会话<br><span class="sub">交互式会话桌面</span></div></div>
+      <div class="component"><div class="component-icon i-agent">🛡</div><div>record-agent.ps1<br><span class="sub">SYSTEM + PsExec -i</span></div></div>
+      <div class="component"><div class="component-icon i-trigger">🎯</div><div>会话生命周期<br><span class="sub">登录启动 · 登出冲刷</span></div></div>
+      <div class="component"><div class="component-icon i-ffmpeg">▶</div><div>ffmpeg 分段录制<br><span class="sub">持续录制 · 分辨率变化重启</span></div></div>
       <div class="component"><div class="component-icon i-script">⚙</div><div>会话脚本<br><span class="sub">start 拉起 · stop 冲刷</span></div></div>
     </div>
-    <p class="layer-note">触发口径：本阶段为「任何键鼠输入即录」，暂不做敏感动作规则目录。<b>Session 0 隔离 → Agent 必须在用户会话内，处于用户上下文，防篡改有限。</b></p>
+    <p class="layer-note">录制进程由 SYSTEM 通过 PsExec 启动到交互式会话桌面。<b>Session 0 无法直接捕获用户桌面。</b></p>
   </div>
 
   <div class="arrow-row"><span class="arrow">⬇</span><span class="flow-label">分段写完（静默 quietSeconds）+ 元数据（用户/会话/时间戳）</span></div>
@@ -106,7 +106,7 @@ h2 { font-size: 19px; font-weight: 600; margin: 0 0 6px 0; }
   <div class="layer layer-auth">
     <div class="layer-label">身份与凭证层 <span class="tag tag-must">零静态密钥</span> <span class="tag tag-defer">最小权限/令牌下发：本阶段未做</span></div>
     <div class="components">
-      <div class="component"><div class="component-icon i-iam">🔑</div><div>fleet IAM 角色<br><span class="sub">AWS CLI 默认凭证链自动获取</span></div></div>
+      <div class="component"><div class="component-icon i-iam">🔑</div><div>fleet IAM 角色<br><span class="sub">命名 profile：appstream_machine_role</span></div></div>
       <div class="component"><div class="component-icon i-net">🔒</div><div>TLS 传输<br><span class="sub">aws s3 cp · 分段上传</span></div></div>
     </div>
     <p class="layer-note">桌面上不存放任何长期 AK/SK；凭证来自 fleet 关联的 IAM 角色。</p>
@@ -116,7 +116,7 @@ h2 { font-size: 19px; font-weight: 600; margin: 0 0 6px 0; }
 
   <!-- Storage -->
   <div class="layer layer-storage">
-    <div class="layer-label">合规存储层（WORM，首尔同区）</div>
+    <div class="layer-label">合规存储层（S3 / KMS / 可选 WORM）</div>
     <div class="components">
       <div class="component"><div class="component-icon i-s3">S3</div><div>Amazon S3<br><span class="sub">会话前缀隔离</span></div></div>
       <div class="component"><div class="component-icon i-kms">🔑</div><div>SSE-KMS<br><span class="sub">专用 CMK·限定解密</span></div></div>
@@ -154,7 +154,7 @@ h2 { font-size: 19px; font-weight: 600; margin: 0 0 6px 0; }
     <div class="layer-label">告知与合规层（必做）</div>
     <div class="components">
       <div class="component"><div class="component-icon i-consent">📢</div><div>登录告知横幅<br><span class="sub">明确告知与同意</span></div></div>
-      <div class="component"><div class="component-icon i-min">🎚</div><div>数据最小化<br><span class="sub">仅活动时录</span></div></div>
+      <div class="component"><div class="component-icon i-min">🎚</div><div>数据最小化<br><span class="sub">限定会话与留存范围</span></div></div>
       <div class="component"><div class="component-icon i-ret">⏳</div><div>留存期上限<br><span class="sub">到期依 Lifecycle 处置</span></div></div>
       <div class="component"><div class="component-icon i-law">⚖</div><div>法域合规<br><span class="sub">跨境·劳动法·隐私法</span></div></div>
     </div>
@@ -164,9 +164,9 @@ h2 { font-size: 19px; font-weight: 600; margin: 0 0 6px 0; }
 
 <div class="legend">
   <div class="legend-title">数据流说明</div>
-  ① session-start 在用户会话内拉起 record-agent.ps1<br>
-  ② Agent 按键鼠活动起停 ffmpeg：有输入即录、空闲超阈值停、恢复输入自动续录，分段落到本地缓冲<br>
-  ③ 分段写完（静默 quietSeconds）→ 用 fleet IAM 角色凭证加密上传到会话专属 S3 prefix，成功即删本地（零静态密钥）<br>
+  ① session-start 以 SYSTEM 运行，下载运行时脚本与配置，并等待交互式会话就绪<br>
+  ② PsExec 将 record-agent.ps1 以 SYSTEM 身份送入会话桌面，ffmpeg 持续分段录制<br>
+  ③ 分段写完（静默 quietSeconds）→ 使用 fleet IAM 角色的命名 profile 加密上传到会话专属 S3 prefix，成功即删本地<br>
   ④ 登出 / 实例回收前，session-stop 置停止标志，Agent 冲刷剩余分段并退出<br>
   ⑤ S3 Event 触发 Lambda 建索引（可选），供审计检索<br>
   ⑥ Object Lock + KMS + CloudTrail(S3 数据事件) 提供防篡改与调阅审计<br>

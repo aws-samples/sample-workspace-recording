@@ -41,8 +41,8 @@ $QuietSec   = if ($cfg.quietSeconds) { [int]$cfg.quietSeconds } else { 30 }
 $UseKms     = [bool]$cfg.sseKms
 $KmsKeyId   = $cfg.kmsKeyId
 
-# SYSTEM context: use a FIXED work dir (do NOT use %LOCALAPPDATA% - that is SYSTEM's, not the user's)
-$WorkDir = 'C:\wsrec\buffer'
+# SYSTEM context: use the configured fixed work dir (do NOT use %LOCALAPPDATA% - that is SYSTEM's, not the user's)
+$WorkDir = if ($cfg.localDir) { [string]$cfg.localDir } else { 'C:\wsrec\buffer' }
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 $LogFile  = Join-Path $WorkDir 'agent.log'
 $StopFlag = Join-Path $WorkDir '.stop'
